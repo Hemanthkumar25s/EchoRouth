@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://echorouth-152970275957.us-west1.run.app/sitemap.xml

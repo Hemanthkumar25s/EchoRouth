@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, immutable)
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - generationCount: number (optional)
+    //   - isPremium: boolean (optional)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // Collection: podcasts
+    // Document ID: {podcastId}
+    // Fields:
+    //   - id: string (required, immutable)
+    //   - userId: string (required, immutable)
+    //   - title: string (required)
+    //   - script: string (required)
+    //   - tone: string (optional)
+    //   - length: string (optional)
+    //   - language: string (optional)
+    //   - isPublic: boolean (optional)
+    //   - createdAt: timestamp (required, immutable)
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isAdmin() {
+      let userDoc = get(/databases/$(database)/documents/users/$(request.auth.uid));
+      return isAuthenticated() &&
+        ((userDoc.data != null && userDoc.data.role == 'admin') ||
+          (request.auth.token.email == "hemanthkumar.s3125@gmail.com" && request.auth.token.email_verified == true));
+    }
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // Domain Validators
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'generationCount', 'isPremium', 'createdAt', 'role']) &&
+             data.uid is string && data.uid.size() > 0 && data.uid.size() < 100 &&
+             (!('email' in data) || data.email == null || (data.email is string && isValidEmail(data.email))) &&
+             (!('displayName' in data) || data.displayName == null || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('generationCount' in data) || (data.generationCount is number && data.generationCount >= 0)) &&
+             (!('isPremium' in data) || (data.isPremium is bool)) &&
+             (!('phoneNumber' in data) || (data.phoneNumber is string && data.phoneNumber.size() < 20)) &&
+             (!('role' in data) || data.role in ['admin', 'user']) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidPodcast(data) {
+      return hasOnlyAllowedFields(['id', 'userId', 'title', 'script', 'tone', 'length', 'language', 'isPublic', 'createdAt']) &&
+             data.id is string &&
+             data.userId is string &&
+             data.title is string &&
+             data.script is string &&
+             (!('tone' in data) || data.tone is string) &&
+             (!('length' in data) || data.length is string) &&
+             (!('language' in data) || data.language is string) &&
+             (!('isPublic' in data) || data.isPublic is bool) &&
+             data.createdAt is timestamp;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow write: if isOwner(userId) || isAdmin();
+    }
+
+    match /podcasts/{podcastId} {
+      // Allow anyone with the ID to read (for audio generation and sharing)
+      // But only allow the owner to list their own podcasts
+      allow get: if true;
+      allow list: if isAuthenticated();
+      
+      allow create: if isAuthenticated() && isValidPodcast(request.resource.data) && request.resource.data.userId == request.auth.uid;
+      allow update: if (isDocOwner() || isAdmin()) && isValidPodcast(request.resource.data) && areImmutableFieldsUnchanged(['id', 'userId', 'createdAt']);
+      allow delete: if isDocOwner() || isAdmin();
+    }
+  }
+}
